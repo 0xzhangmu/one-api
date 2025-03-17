@@ -33,6 +33,8 @@ func StreamHandler(c *gin.Context, resp *http.Response, relayMode int) (*model.E
 	common.SetEventStreamHeaders(c)
 
 	doneRendered := false
+	is_deepseek_r1 := strings.Contains(strings.ToLower(c.GetString("request_model")), "deepseek-r1")
+	is_first_message := true
 	for scanner.Scan() {
 		data := scanner.Text()
 		if len(data) < dataPrefixLength { // ignore blank line or wrong format
@@ -40,6 +42,24 @@ func StreamHandler(c *gin.Context, resp *http.Response, relayMode int) (*model.E
 		}
 		if data[:dataPrefixLength] != dataPrefix && data[:dataPrefixLength] != done {
 			continue
+		}
+		if is_first_message && is_deepseek_r1 {
+			is_first_message = false
+			var streamResponse ChatCompletionsStreamResponse
+			err := json.Unmarshal([]byte(data[dataPrefixLength:]), &streamResponse)
+			if err == nil {
+				if streamResponse.Choices[0].Delta.Content == nil {
+					streamResponse.Choices[0].Delta.Content = "<think>"
+				} else {
+					streamResponse.Choices[0].Delta.Content = "<think>" + streamResponse.Choices[0].Delta.Content.(string)
+				}
+				newData, err := json.Marshal(streamResponse)
+				if err == nil {
+					render.StringData(c, string(newData))
+					continue
+				}
+			}
+
 		}
 		if strings.HasPrefix(data[dataPrefixLength:], done) {
 			render.StringData(c, data)
@@ -116,6 +136,16 @@ func Handler(c *gin.Context, resp *http.Response, promptTokens int, modelName st
 			StatusCode: resp.StatusCode,
 		}, nil
 	}
+
+	// is_deepseek_r1 := strings.Contains(strings.ToLower(c.GetString("request_model")), "deepseek-r1")
+	// if is_deepseek_r1 {
+	// 	textResponse.Choices[0].Content = "<think>" + textResponse.Choices[0].Content.(string)
+	// 	responseBodyNew, err := json.Marshal(textResponse)
+	// 	if err == nil {
+	// 		responseBody = responseBodyNew
+	// 	}
+	// }
+
 	// Reset response body
 	resp.Body = io.NopCloser(bytes.NewBuffer(responseBody))
 
