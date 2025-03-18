@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"io"
 	"net/http"
+	"os"
 	"strings"
 
 	"github.com/songquanpeng/one-api/common/render"
@@ -13,10 +14,14 @@ import (
 	"github.com/gin-gonic/gin"
 	"github.com/songquanpeng/one-api/common"
 	"github.com/songquanpeng/one-api/common/conv"
+	"github.com/songquanpeng/one-api/common/ctxkey"
 	"github.com/songquanpeng/one-api/common/logger"
 	"github.com/songquanpeng/one-api/relay/model"
 	"github.com/songquanpeng/one-api/relay/relaymode"
 )
+
+var thinkModels = os.Getenv("THINK_MODELS")
+var modelsArray = strings.Split(thinkModels, ",")
 
 const (
 	dataPrefix       = "data: "
@@ -33,8 +38,12 @@ func StreamHandler(c *gin.Context, resp *http.Response, relayMode int) (*model.E
 	common.SetEventStreamHeaders(c)
 
 	doneRendered := false
-	is_deepseek_r1 := strings.Contains(strings.ToLower(c.GetString("request_model")), "deepseek-r1")
-	is_first_message := true
+	isDeepseekR1 := false
+	for _, v := range modelsArray {
+		isDeepseekR1 = isDeepseekR1 || strings.Contains(strings.ToLower(c.GetString(ctxkey.RequestModel)), v)
+	}
+
+	isFirstMessage := true
 	for scanner.Scan() {
 		data := scanner.Text()
 		if len(data) < dataPrefixLength { // ignore blank line or wrong format
@@ -43,23 +52,25 @@ func StreamHandler(c *gin.Context, resp *http.Response, relayMode int) (*model.E
 		if data[:dataPrefixLength] != dataPrefix && data[:dataPrefixLength] != done {
 			continue
 		}
-		if is_first_message && is_deepseek_r1 {
-			is_first_message = false
-			var streamResponse ChatCompletionsStreamResponse
-			err := json.Unmarshal([]byte(data[dataPrefixLength:]), &streamResponse)
-			if err == nil {
-				if streamResponse.Choices[0].Delta.Content == nil {
-					streamResponse.Choices[0].Delta.Content = "<think>"
-				} else {
-					streamResponse.Choices[0].Delta.Content = "<think>" + streamResponse.Choices[0].Delta.Content.(string)
-				}
-				newData, err := json.Marshal(streamResponse)
+		if isFirstMessage {
+			isFirstMessage = false
+
+			if isDeepseekR1 {
+				var streamResponse ChatCompletionsStreamResponse
+				err := json.Unmarshal([]byte(data[dataPrefixLength:]), &streamResponse)
 				if err == nil {
-					render.StringData(c, string(newData))
-					continue
+					if streamResponse.Choices[0].Delta.Content == nil {
+						streamResponse.Choices[0].Delta.Content = "<think>\n"
+					} else {
+						streamResponse.Choices[0].Delta.Content = "<think>\n" + streamResponse.Choices[0].Delta.Content.(string)
+					}
+					newData, err := json.Marshal(streamResponse)
+					if err == nil {
+						render.StringData(c, string(newData))
+						continue
+					}
 				}
 			}
-
 		}
 		if strings.HasPrefix(data[dataPrefixLength:], done) {
 			render.StringData(c, data)
